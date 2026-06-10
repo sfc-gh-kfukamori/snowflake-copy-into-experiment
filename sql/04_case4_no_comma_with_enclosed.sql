@@ -8,13 +8,27 @@
 -- 期待: 2 行が正しくロードされ、クォートがストリップされて改行が保持される
 -- =============================================================
 
-USE DATABASE DEMO;
+USE DATABASE CSV_EXPERIMENT_DB;
 USE SCHEMA PUBLIC;
 
-CREATE OR REPLACE TEMPORARY TABLE test_case4 (raw_data VARCHAR);
+CREATE OR REPLACE TABLE CASE4_NO_COMMA_WITH_ENCLOSED_BY (
+    raw_data        VARCHAR,
+    char_length     INT,
+    has_doublequote BOOLEAN,
+    has_newline     BOOLEAN,
+    visible_newline VARCHAR
+);
 
-COPY INTO test_case4
-FROM @~/test_fk/test_no_comma.csv
+COPY INTO CASE4_NO_COMMA_WITH_ENCLOSED_BY
+FROM (
+    SELECT
+        $1,
+        LENGTH($1),
+        CONTAINS($1, '"'),
+        CONTAINS($1, '\n'),
+        REPLACE($1, '\n', '[LF]')
+    FROM @CSV_EXPERIMENT_DB.PUBLIC.csv_load_stage/test_no_comma.csv
+)
 FILE_FORMAT = (
     TYPE = 'CSV'
     FIELD_DELIMITER = NONE
@@ -23,15 +37,9 @@ FILE_FORMAT = (
 );
 
 -- 結果確認
-SELECT COUNT(*) AS row_count FROM test_case4;
+SELECT COUNT(*) AS row_count FROM CASE4_NO_COMMA_WITH_ENCLOSED_BY;
 
-SELECT
-    raw_data,
-    LENGTH(raw_data)                AS char_length,
-    CONTAINS(raw_data, '"')         AS has_doublequote,
-    CONTAINS(raw_data, '\n')        AS has_newline,
-    REPLACE(raw_data, '\n', '[LF]') AS visible_newline
-FROM test_case4;
+SELECT * FROM CASE4_NO_COMMA_WITH_ENCLOSED_BY;
 
 -- 期待する出力:
 -- row_count = 2

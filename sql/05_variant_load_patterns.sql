@@ -4,13 +4,13 @@
 -- フィールド内改行を含むCSVを VARIANT 型にロードする実用的なアプローチ
 -- =============================================================
 
-USE DATABASE DEMO;
+USE DATABASE CSV_EXPERIMENT_DB;
 USE SCHEMA PUBLIC;
 
 -- ---------------------------------------------------------------
 -- パターンA: フィールド内改行なし → FIELD_DELIMITER=NONE + TO_VARIANT
 -- ---------------------------------------------------------------
-CREATE OR REPLACE TEMPORARY TABLE bronze_no_newline (
+CREATE OR REPLACE TABLE bronze_no_newline (
     inserted_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
     raw_data    VARIANT
 );
@@ -18,7 +18,7 @@ CREATE OR REPLACE TEMPORARY TABLE bronze_no_newline (
 COPY INTO bronze_no_newline (inserted_at, raw_data)
 FROM (
     SELECT CURRENT_TIMESTAMP(), TO_VARIANT($1)
-    FROM @~/test_fk/test_with_comma.csv  -- 改行なしファイルを使う場合
+    FROM @CSV_EXPERIMENT_DB.PUBLIC.csv_load_stage/test_with_comma.csv
 )
 FILE_FORMAT = (
     TYPE = 'CSV'
@@ -26,11 +26,13 @@ FILE_FORMAT = (
     RECORD_DELIMITER = '\n'
 );
 
+SELECT inserted_at, raw_data FROM bronze_no_newline;
+
 
 -- ---------------------------------------------------------------
 -- パターンB: フィールド内改行あり → OBJECT_CONSTRUCT（カラム数固定）
 -- ---------------------------------------------------------------
-CREATE OR REPLACE TEMPORARY TABLE bronze_with_newline_obj (
+CREATE OR REPLACE TABLE bronze_with_newline_obj (
     inserted_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
     raw_data    VARIANT
 );
@@ -44,7 +46,7 @@ FROM (
             'c2', $2,
             'c3', $3
         )
-    FROM @~/test_fk/test_with_comma.csv
+    FROM @CSV_EXPERIMENT_DB.PUBLIC.csv_load_stage/test_with_comma.csv
 )
 FILE_FORMAT = (
     TYPE = 'CSV'
@@ -61,7 +63,7 @@ SELECT inserted_at, raw_data FROM bronze_with_newline_obj;
 -- ---------------------------------------------------------------
 -- パターンC: フィールド内改行あり → ARRAY_CONSTRUCT（カラム数不定）
 -- ---------------------------------------------------------------
-CREATE OR REPLACE TEMPORARY TABLE bronze_with_newline_arr (
+CREATE OR REPLACE TABLE bronze_with_newline_arr (
     inserted_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
     raw_data    VARIANT
 );
@@ -72,7 +74,7 @@ FROM (
         CURRENT_TIMESTAMP(),
         ARRAY_CONSTRUCT($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         -- 最大カラム数まで $N を列挙（余分なカラムは NULL になるがエラーにはならない）
-    FROM @~/test_fk/test_with_comma.csv
+    FROM @CSV_EXPERIMENT_DB.PUBLIC.csv_load_stage/test_with_comma.csv
 )
 FILE_FORMAT = (
     TYPE = 'CSV'

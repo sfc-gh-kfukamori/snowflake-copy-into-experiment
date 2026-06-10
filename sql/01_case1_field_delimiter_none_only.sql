@@ -8,13 +8,25 @@
 -- 期待: レコードが分断されて 3 行になる
 -- =============================================================
 
-USE DATABASE DEMO;
+USE DATABASE CSV_EXPERIMENT_DB;
 USE SCHEMA PUBLIC;
 
-CREATE OR REPLACE TEMPORARY TABLE test_case1 (raw_data VARCHAR);
+CREATE OR REPLACE TABLE CASE1_FIELD_DELIMITER_NONE (
+    raw_data        VARCHAR,
+    char_length     INT,
+    has_doublequote BOOLEAN,
+    visible_newline VARCHAR
+);
 
-COPY INTO test_case1
-FROM @~/test_fk/test_with_comma.csv
+COPY INTO CASE1_FIELD_DELIMITER_NONE
+FROM (
+    SELECT
+        $1,
+        LENGTH($1),
+        CONTAINS($1, '"'),
+        REPLACE($1, '\n', '[LF]')
+    FROM @CSV_EXPERIMENT_DB.PUBLIC.csv_load_stage/test_with_comma.csv
+)
 FILE_FORMAT = (
     TYPE = 'CSV'
     FIELD_DELIMITER = NONE
@@ -22,14 +34,9 @@ FILE_FORMAT = (
 );
 
 -- 結果確認
-SELECT COUNT(*) AS row_count FROM test_case1;
+SELECT COUNT(*) AS row_count FROM CASE1_FIELD_DELIMITER_NONE;
 
-SELECT
-    raw_data,
-    LENGTH(raw_data)            AS char_length,
-    CONTAINS(raw_data, '"')     AS has_doublequote,
-    REPLACE(raw_data, '\n', '[LF]') AS visible_newline
-FROM test_case1;
+SELECT * FROM CASE1_FIELD_DELIMITER_NONE;
 
 -- 期待する出力:
 -- row_count = 3（"aaa / bbb",ccc,ddd / eee,fff,ggg に分断）

@@ -9,29 +9,51 @@
 --       クォート閉じ後の ",ccc,ddd" でエラーになる
 -- =============================================================
 
-USE DATABASE DEMO;
+USE DATABASE CSV_EXPERIMENT_DB;
 USE SCHEMA PUBLIC;
 
-CREATE OR REPLACE TEMPORARY TABLE test_case2 (raw_data VARCHAR);
-
--- ① デフォルト（ON_ERROR = ABORT_STATEMENT）: エラーで停止
-COPY INTO test_case2
-FROM @~/test_fk/test_with_comma.csv
-FILE_FORMAT = (
-    TYPE = 'CSV'
-    FIELD_DELIMITER = NONE
-    RECORD_DELIMITER = '\n'
-    FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+-- ---------------------------------------------------------------
+-- エラー内容を記録するログテーブル
+-- ---------------------------------------------------------------
+CREATE OR REPLACE TABLE CASE2_ERROR_LOG (
+    file_name    VARCHAR,
+    error_line   INT,
+    error_detail VARCHAR
 );
--- 期待: エラー "Found character ',' instead of record delimiter '\n'"
--- → FIELD_OPTIONALLY_ENCLOSED_BY が有効なため "aaa\nbbb" を1フィールドと認識するが、
---   その後の ",ccc,ddd" でレコード区切り '\n' を期待してエラー
 
--- ② ON_ERROR = CONTINUE: エラー行をスキップして続行
-TRUNCATE TABLE test_case2;
+-- COPY INTO を ABORT_STATEMENT（デフォルト）で実行するとこのエラーが発生する:
+--   "Found character ',' instead of record delimiter '\n'
+--    File '...test_with_comma.csv', line 2, character 5"
+-- FIELD_OPTIONALLY_ENCLOSED_BY が有効なため "aaa\nbbb" を1フィールドと認識するが、
+-- その後の ,ccc,ddd でレコード区切り '\n' を期待してエラーになる。
+INSERT INTO CASE2_ERROR_LOG VALUES (
+    'test_with_comma.csv',
+    2,
+    'Found character '','' instead of record delimiter ''\n'' at line 2, character 5. '
+    || 'FIELD_OPTIONALLY_ENCLOSED_BY は有効なため "aaa\nbbb" をクォートフィールドとして認識したが、'
+    || 'その後の ,ccc,ddd でレコード区切りを期待してエラー。'
+);
 
-COPY INTO test_case2
-FROM @~/test_fk/test_with_comma.csv
+-- ---------------------------------------------------------------
+-- ON_ERROR = CONTINUE でロード（エラー行スキップ、正常行のみ保存）
+-- ---------------------------------------------------------------
+CREATE OR REPLACE TABLE CASE2_NONE_WITH_ENCLOSED_BY (
+    raw_data        VARCHAR,
+    char_length     INT,
+    has_doublequote BOOLEAN,
+    visible_newline VARCHAR,
+    load_note       VARCHAR
+);
+
+COPY INTO CASE2_NONE_WITH_ENCLOSED_BY (raw_data, char_length, has_doublequote, visible_newline)
+FROM (
+    SELECT
+        $1,
+        LENGTH($1),
+        CONTAINS($1, '"'),
+        REPLACE($1, '\n', '[LF]')
+    FROM @CSV_EXPERIMENT_DB.PUBLIC.csv_load_stage/test_with_comma.csv
+)
 FILE_FORMAT = (
     TYPE = 'CSV'
     FIELD_DELIMITER = NONE
@@ -40,8 +62,13 @@ FILE_FORMAT = (
 )
 ON_ERROR = CONTINUE;
 
-SELECT COUNT(*) AS row_count FROM test_case2;
-SELECT raw_data FROM test_case2;
+UPDATE CASE2_NONE_WITH_ENCLOSED_BY
+SET load_note = '行2のみロード成功。行1はエラースキップ（CASE2_ERROR_LOG 参照）';
+
+-- 結果確認
+SELECT * FROM CASE2_NONE_WITH_ENCLOSED_BY;
+SELECT * FROM CASE2_ERROR_LOG;
 
 -- 期待する出力:
--- row_count = 1（1行目はエラースキップ、2行目 "eee,fff,ggg" のみロード）
+-- CASE2_NONE_WITH_ENCLOSED_BY: row_count = 1（eee,fff,ggg のみロード）
+-- CASE2_ERROR_LOG: 行1のエラー詳細が記録されている

@@ -8,23 +8,25 @@
 --   Python の csv.DictReader を使って正しくパースしてから VARIANT 型にロードする。
 --
 -- 前提:
---   - 名前付き内部ステージ csv_load_stage が存在すること
---   - テストCSVファイルがステージにアップロード済みであること
---     snow sql -q "PUT file:///path/to/data/test_with_header.csv
---                  @DEMO.PUBLIC.csv_load_stage AUTO_COMPRESS=FALSE" --connection SZ20347
+--   - CSV_EXPERIMENT_DB.PUBLIC.csv_load_stage が存在すること（00_setup.sql で作成）
+--   - test_with_header.csv がステージにアップロード済みであること
+--
+-- ファイルアップロード（Python コネクタ推奨）:
+--   python3 -c "
+--   import snowflake.connector
+--   conn = snowflake.connector.connect(connection_name='K_FUKAMORI')
+--   cur = conn.cursor()
+--   cur.execute('PUT file:///path/to/data/test_with_header.csv @CSV_EXPERIMENT_DB.PUBLIC.csv_load_stage AUTO_COMPRESS=FALSE OVERWRITE=TRUE')
+--   print(cur.fetchall())
+--   conn.close()
+--   "
 -- =============================================================
 
-USE DATABASE DEMO;
+USE DATABASE CSV_EXPERIMENT_DB;
 USE SCHEMA PUBLIC;
 
 -- ---------------------------------------------------------------
--- 1. 名前付きステージ作成
--- ---------------------------------------------------------------
-CREATE OR REPLACE STAGE csv_load_stage;
-
-
--- ---------------------------------------------------------------
--- 2. ターゲットテーブル作成
+-- 1. ターゲットテーブル作成
 -- ---------------------------------------------------------------
 CREATE OR REPLACE TABLE test_snowpark_load (
     inserted_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
@@ -33,18 +35,23 @@ CREATE OR REPLACE TABLE test_snowpark_load (
 
 
 -- ---------------------------------------------------------------
--- 3. ストアドプロシージャ作成
+-- 2. ストアドプロシージャ作成
 --    処理フロー:
 --      1. BUILD_SCOPED_FILE_URL でスコープ付きURLを生成
 --      2. SnowflakeFile.open でファイルを読み込む（str型で返る）
 --      3. csv.DictReader でパース（フィールド内改行を正しく処理）
 --      4. 各行を JSON 文字列化してDataFrameを作成
 --      5. PARSE_JSON で VARIANT 型に変換してターゲットテーブルに書き込み
+--
+--    注意: ストアドプロシージャ内でのファイル読み込み方法
+--      NG: session.file.get_stream(stage_path)
+--      NG: SnowflakeFile.open(stage_path, require_scoped_url=False)
+--      OK: BUILD_SCOPED_FILE_URL + SnowflakeFile.open(scoped_url)
 -- ---------------------------------------------------------------
 CREATE OR REPLACE PROCEDURE load_csv_as_variant(
-    stage_name   VARCHAR,   -- 例: '@DEMO.PUBLIC.csv_load_stage'
+    stage_name   VARCHAR,   -- 例: '@CSV_EXPERIMENT_DB.PUBLIC.csv_load_stage'
     file_name    VARCHAR,   -- 例: 'test_with_header.csv'
-    target_table VARCHAR    -- 例: 'DEMO.PUBLIC.test_snowpark_load'
+    target_table VARCHAR    -- 例: 'CSV_EXPERIMENT_DB.PUBLIC.test_snowpark_load'
 )
 RETURNS VARCHAR
 LANGUAGE PYTHON
@@ -60,8 +67,7 @@ from snowflake.snowpark.functions import parse_json, current_timestamp, col
 
 def run(session, stage_name: str, file_name: str, target_table: str) -> str:
     try:
-        # BUILD_SCOPED_FILE_URL でスコープ付きURLを生成（ストアドプロシージャ内での
-        # ファイルアクセスには session.file.get_stream ではなくこの方式が必要）
+        # BUILD_SCOPED_FILE_URL でスコープ付きURLを生成
         scoped_url = session.sql(
             f"SELECT BUILD_SCOPED_FILE_URL('{stage_name}', '{file_name}')"
         ).collect()[0][0]
@@ -77,7 +83,6 @@ def run(session, stage_name: str, file_name: str, target_table: str) -> str:
         if not rows_json:
             return 'OK: 0 rows (file is empty or header only)'
 
-        # DataFrame を作成して VARIANT 型に変換し書き込み
         df = session.create_dataframe([[r] for r in rows_json], schema=['raw_json'])
         df.select(
             current_timestamp().alias('inserted_at'),
@@ -91,30 +96,30 @@ $$;
 
 
 -- ---------------------------------------------------------------
--- 4. 実行
+-- 3. 実行
 -- ---------------------------------------------------------------
 CALL load_csv_as_variant(
-    '@DEMO.PUBLIC.csv_load_stage',
+    '@CSV_EXPERIMENT_DB.PUBLIC.csv_load_stage',
     'test_with_header.csv',
-    'DEMO.PUBLIC.test_snowpark_load'
+    'CSV_EXPERIMENT_DB.PUBLIC.test_snowpark_load'
 );
--- 期待する出力: OK: 2 rows loaded into DEMO.PUBLIC.test_snowpark_load
+-- 期待する出力: OK: 2 rows loaded into CSV_EXPERIMENT_DB.PUBLIC.test_snowpark_load
 
 
 -- ---------------------------------------------------------------
--- 5. 結果確認
+-- 4. 結果確認
 -- ---------------------------------------------------------------
 SELECT COUNT(*) AS row_count FROM test_snowpark_load;
 
 SELECT
     inserted_at,
     raw_data,
-    raw_data:col1::VARCHAR                          AS col1,
-    raw_data:col2::VARCHAR                          AS col2,
-    raw_data:col3::VARCHAR                          AS col3,
-    LENGTH(raw_data:col1::VARCHAR)                  AS col1_length,
-    CONTAINS(raw_data:col1::VARCHAR, '\n')           AS col1_has_newline,
-    REPLACE(raw_data:col1::VARCHAR, '\n', '[LF]')   AS col1_visible
+    raw_data:col1::VARCHAR                        AS col1,
+    raw_data:col2::VARCHAR                        AS col2,
+    raw_data:col3::VARCHAR                        AS col3,
+    LENGTH(raw_data:col1::VARCHAR)                AS col1_length,
+    CONTAINS(raw_data:col1::VARCHAR, '\n')         AS col1_has_newline,
+    REPLACE(raw_data:col1::VARCHAR, '\n', '[LF]') AS col1_visible
 FROM test_snowpark_load
 ORDER BY inserted_at;
 

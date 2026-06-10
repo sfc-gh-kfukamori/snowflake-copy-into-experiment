@@ -8,13 +8,29 @@
 -- 期待: 2 行が正しくロードされ、c1 = "aaa\nbbb"（改行込み）
 -- =============================================================
 
-USE DATABASE DEMO;
+USE DATABASE CSV_EXPERIMENT_DB;
 USE SCHEMA PUBLIC;
 
-CREATE OR REPLACE TEMPORARY TABLE test_case3 (c1 VARCHAR, c2 VARCHAR, c3 VARCHAR);
+CREATE OR REPLACE TABLE CASE3_NORMAL_CSV (
+    c1             VARCHAR,
+    c2             VARCHAR,
+    c3             VARCHAR,
+    c1_length      INT,
+    c1_has_newline BOOLEAN,
+    c1_visible     VARCHAR
+);
 
-COPY INTO test_case3
-FROM @~/test_fk/test_with_comma.csv
+COPY INTO CASE3_NORMAL_CSV
+FROM (
+    SELECT
+        $1,
+        $2,
+        $3,
+        LENGTH($1),
+        CONTAINS($1, '\n'),
+        REPLACE($1, '\n', '[LF]')
+    FROM @CSV_EXPERIMENT_DB.PUBLIC.csv_load_stage/test_with_comma.csv
+)
 FILE_FORMAT = (
     TYPE = 'CSV'
     FIELD_DELIMITER = ','
@@ -23,16 +39,9 @@ FILE_FORMAT = (
 );
 
 -- 結果確認
-SELECT COUNT(*) AS row_count FROM test_case3;
+SELECT COUNT(*) AS row_count FROM CASE3_NORMAL_CSV;
 
-SELECT
-    c1,
-    c2,
-    c3,
-    LENGTH(c1)                  AS c1_length,
-    CONTAINS(c1, '\n')          AS c1_has_newline,
-    REPLACE(c1, '\n', '[LF]')   AS c1_visible
-FROM test_case3;
+SELECT * FROM CASE3_NORMAL_CSV;
 
 -- 期待する出力:
 -- row_count = 2
