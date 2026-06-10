@@ -107,17 +107,6 @@ id,name,description,category,price
 
 ---
 
-## 実験環境
-
-| 項目 | 値 |
-|------|-----|
-| Snowflake接続 | K_FUKAMORI |
-| アカウントロケータ | ZX48016 |
-| データベース | CSV_EXPERIMENT_DB |
-| スキーマ | PUBLIC |
-| ステージ | `@CSV_EXPERIMENT_DB.PUBLIC.csv_load_stage`（名前付き内部ステージ） |
-| Snowflake CLI | 3.15.0 |
-| 実験日 | 2026-06-10 |
 
 ### ファイルアップロード方法
 
