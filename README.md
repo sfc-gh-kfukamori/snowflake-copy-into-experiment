@@ -107,27 +107,6 @@ id,name,description,category,price
 
 ---
 
-
-### ファイルアップロード方法
-
-`snow` CLI のセッショントークンが無効になる場合があるため、Python コネクタを推奨する。
-
-```python
-import snowflake.connector
-
-conn = snowflake.connector.connect(connection_name='K_FUKAMORI')
-cur = conn.cursor()
-for f in ['test_with_comma.csv', 'test_no_comma.csv', 'test_with_header.csv']:
-    cur.execute(
-        f'PUT file:///path/to/data/{f} '
-        '@CSV_EXPERIMENT_DB.PUBLIC.csv_load_stage '
-        'AUTO_COMPRESS=FALSE OVERWRITE=TRUE'
-    )
-conn.close()
-```
-
----
-
 ## 実験結果
 
 ### Case 1: `FIELD_DELIMITER = NONE` のみ（test_with_comma.csv）
