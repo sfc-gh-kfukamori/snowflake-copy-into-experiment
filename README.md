@@ -17,7 +17,8 @@ snowflake-copy-into-experiment/
 │   ├── test_with_comma.csv       # フィールド内改行あり・カンマあり（ヘッダーなし）
 │   ├── test_no_comma.csv         # フィールド内改行あり・カンマなし（1カラムCSV）
 │   ├── test_with_header.csv      # フィールド内改行あり・カンマあり・ヘッダーあり（回避策B用）
-│   └── test_products.csv         # 回避策B 動作確認用（異なるスキーマ・複数行にまたがる改行）
+│   ├── test_products.csv         # OBJECT_CONSTRUCT/回避策B 動作確認用（4カラム・複数行改行）
+│   └── test_products_v2.csv      # スキーマ変更検証用（5カラム・price追加）
 └── sql/
     ├── 00_setup.sql                              # 実験環境のセットアップ
     ├── 01_case1_field_delimiter_none_only.sql    # Case 1: FIELD_DELIMITER=NONE のみ
@@ -25,7 +26,8 @@ snowflake-copy-into-experiment/
     ├── 03_case3_normal_csv.sql                   # Case 3: 正常系（比較用）
     ├── 04_case4_no_comma_with_enclosed.sql       # Case 4: カンマなしCSV + FIELD_OPTIONALLY_ENCLOSED_BY
     ├── 05_variant_load_patterns.sql              # 参考: VARIANT型ロードパターン集
-    └── 06_workaround_b_snowpark_sproc.sql        # 回避策B: Snowpark Python ストアドプロシージャ
+    ├── 06_workaround_b_snowpark_sproc.sql        # 回避策B: Snowpark Python ストアドプロシージャ
+    └── 07_case5_object_construct.sql             # Case 5: OBJECT_CONSTRUCT パターン
 ```
 
 ---
@@ -90,6 +92,18 @@ id,name,description,category
 - id=1: `description` に1行の改行を含む
 - id=2,4: 改行なしの通常フィールド
 - id=3: `description` が3行にまたがる改行を含む
+
+### test_products_v2.csv（スキーマ変更検証用・price カラム追加）
+
+```
+id,name,description,category,price
+5,Product E,新商品です,Electronics,1980
+6,Product F,"説明が
+複数行",Food,500
+```
+
+- `test_products.csv` に `price` カラムを追加した5カラム構成
+- OBJECT_CONSTRUCT でのスキーマ変更時の制限を検証するために使用
 
 ---
 
@@ -506,6 +520,79 @@ OK: 4 rows loaded from 1/1 file(s)
 
 ---
 
+## Case 5: OBJECT_CONSTRUCT パターン（実験結果）
+
+### 概要
+
+`FIELD_DELIMITER = ','` + `FIELD_OPTIONALLY_ENCLOSED_BY = '"'` + `OBJECT_CONSTRUCT` の組み合わせ。フィールド内改行を正しく処理しつつ、純粋な SQL だけで VARIANT 型にロードできる。
+
+### Case 5a: test_with_header.csv（3カラム）
+
+**テーブル:** `CSV_EXPERIMENT_DB.PUBLIC.CASE5A_OBJECT_CONSTRUCT_HEADER`
+
+```sql
+COPY INTO CASE5A_OBJECT_CONSTRUCT_HEADER (inserted_at, raw_data)
+FROM (
+    SELECT CURRENT_TIMESTAMP(),
+           OBJECT_CONSTRUCT('col1', $1, 'col2', $2, 'col3', $3)
+    FROM @CSV_EXPERIMENT_DB.PUBLIC.csv_load_stage/test_with_header.csv
+)
+FILE_FORMAT = (
+    TYPE = 'CSV'  FIELD_DELIMITER = ','
+    FIELD_OPTIONALLY_ENCLOSED_BY = '"'  SKIP_HEADER = 1
+);
+```
+
+**結果: 2行ロード成功**
+
+| col1 | col2 | col3 | col1_length | col1_has_newline | col1_visible |
+|------|------|------|-------------|------------------|--------------|
+| `aaa\nbbb` | ccc | ddd | **7** | **True** | `aaa[LF]bbb` |
+| eee | fff | ggg | 3 | False | `eee` |
+
+### Case 5b: test_products.csv（4カラム・3行にまたがる改行）
+
+**テーブル:** `CSV_EXPERIMENT_DB.PUBLIC.CASE5B_OBJECT_CONSTRUCT_PRODUCTS`
+
+**結果: 4行ロード成功**
+
+| id | name | category | desc_length | desc_has_newline | desc_visible |
+|----|------|----------|-------------|------------------|--------------|
+| 1 | Product A | Electronics | 15 | **True** | `高品質アイテム[LF]屋外使用に最適` |
+| 2 | Product B | Clothing | 6 | False | `標準アイテム` |
+| 3 | Product C | Food | 16 | **True** | `複数行の[LF]説明文[LF]3行にまたがる` |
+| 4 | Product D | Electronics | 7 | False | `シンプルな説明` |
+
+### Case 5c: スキーマ変更時の挙動（制限の実証）
+
+**テーブル:** `CSV_EXPERIMENT_DB.PUBLIC.CASE5C_SCHEMA_CHANGE_OBJECT_CONSTRUCT`
+
+`price` カラムが追加された `test_products_v2.csv` を、旧スキーマ（4カラム）のSQL のまま処理した場合：
+
+**結果: price が欠落**
+
+| id | name | price（期待値） | price（実際） |
+|----|------|---------------|-------------|
+| 5 | Product E | 1980 | **NULL** |
+| 6 | Product F | 500 | **NULL** |
+
+`$5`（price）を `OBJECT_CONSTRUCT` に含め忘れたため、新カラムが欠落する。**スキーマ変更のたびに SQL の修正が必要。**
+
+---
+
+### OBJECT_CONSTRUCT vs Snowpark ストアドプロシージャ の比較
+
+| 観点 | OBJECT_CONSTRUCT | Snowpark ストアドプロシージャ |
+|------|-----------------|---------------------------|
+| 実装方法 | 純粋SQL | Python コード必要 |
+| フィールド内改行 | ✅ 対応 | ✅ 対応 |
+| カラム名の保持 | ✅ 明示的に指定 | ✅ ヘッダー行から自動取得 |
+| スキーマ変更への追従 | ❌ SQL修正が必要 | ✅ 自動追従 |
+| 未ロードファイルの自動検出 | ❌ なし（COPY INTOの履歴機能で代替可） | ✅ SPROC_LOAD_HISTORY で管理 |
+| カラム数が未知 | ❌ 事前に把握が必要 | ✅ 不要 |
+
+---
+
 ## Snowflakeオブジェクト一覧（CSV_EXPERIMENT_DB.PUBLIC）
 
 | オブジェクト名 | 種別 | 説明 |
@@ -519,6 +606,9 @@ OK: 4 rows loaded from 1/1 file(s)
 | `TEST_SNOWPARK_LOAD` | テーブル | 回避策B 実験結果（VARIANT型） |
 | `SPROC_LOAD_HISTORY` | テーブル | 回避策B ロード履歴（重複ロード防止用） |
 | `LOAD_CSV_AS_VARIANT` | ストアドプロシージャ | 回避策B 実装（引数: stage_name, target_table） |
+| `CASE5A_OBJECT_CONSTRUCT_HEADER` | テーブル | Case 5a 実験結果（test_with_header.csv） |
+| `CASE5B_OBJECT_CONSTRUCT_PRODUCTS` | テーブル | Case 5b 実験結果（test_products.csv・4行） |
+| `CASE5C_SCHEMA_CHANGE_OBJECT_CONSTRUCT` | テーブル | Case 5c スキーマ変更時の制限検証 |
 
 ---
 
