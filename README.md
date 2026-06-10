@@ -16,7 +16,8 @@ snowflake-copy-into-experiment/
 ├── data/
 │   ├── test_with_comma.csv       # フィールド内改行あり・カンマあり（ヘッダーなし）
 │   ├── test_no_comma.csv         # フィールド内改行あり・カンマなし（1カラムCSV）
-│   └── test_with_header.csv      # フィールド内改行あり・カンマあり・ヘッダーあり（回避策B用）
+│   ├── test_with_header.csv      # フィールド内改行あり・カンマあり・ヘッダーあり（回避策B用）
+│   └── test_products.csv         # 回避策B 動作確認用（異なるスキーマ・複数行にまたがる改行）
 └── sql/
     ├── 00_setup.sql                              # 実験環境のセットアップ
     ├── 01_case1_field_delimiter_none_only.sql    # Case 1: FIELD_DELIMITER=NONE のみ
@@ -71,6 +72,24 @@ eee,fff,ggg
 - 1行目: ヘッダー行（`csv.DictReader` がキーとして使用）
 - 2レコード目: `col1` にフィールド内改行を含むレコード
 - 3レコード目: 通常のレコード
+
+### test_products.csv（回避策B 動作確認用・異なるスキーマ）
+
+```
+id,name,description,category
+1,Product A,"高品質アイテム
+屋外使用に最適",Electronics
+2,Product B,標準アイテム,Clothing
+3,Product C,"複数行の
+説明文
+3行にまたがる",Food
+4,Product D,シンプルな説明,Electronics
+```
+
+- ヘッダー: `id, name, description, category`（`test_with_header.csv` とは異なるスキーマ）
+- id=1: `description` に1行の改行を含む
+- id=2,4: 改行なしの通常フィールド
+- id=3: `description` が3行にまたがる改行を含む
 
 ---
 
@@ -440,6 +459,50 @@ OK: No new files to process (all 3 file(s) already loaded)
 ### スキーマ変更への追従
 
 `csv.DictReader` はヘッダー行を自動的にキーとして読み取るため、CSVにカラムが追加・削除されてもプロシージャのコード変更は不要。新カラムは自動的に VARIANT の新キーとして取り込まれる。
+
+---
+
+### 追加検証: 新規ファイル（test_products.csv）での動作確認
+
+`test_with_header.csv` とは異なるスキーマ（`id, name, description, category`）・3行にまたがるフィールド内改行を含む `test_products.csv` を追加してプロシージャを再実行し、以下を検証した。
+
+**実行結果:**
+```
+OK: 4 rows loaded from 1/1 file(s)
+  test_products.csv: 4 rows -> SUCCESS
+```
+
+- ステージ内の4ファイルのうち、既ロード済み3ファイル（`test_no_comma.csv`, `test_with_comma.csv`, `test_with_header.csv`）は**スキップ**
+- 新規1ファイルのみが処理された（重複ロード防止の動作を確認）
+
+**ロード結果の詳細（`TEST_SNOWPARK_LOAD` より）:**
+
+| id | name | category | desc_length | desc_has_newline | desc_visible |
+|----|------|----------|-------------|------------------|--------------|
+| 1 | Product A | Electronics | 15 | **True** | `高品質アイテム[LF]屋外使用に最適` |
+| 2 | Product B | Clothing | 6 | False | `標準アイテム` |
+| 3 | Product C | Food | 16 | **True** | `複数行の[LF]説明文[LF]3行にまたがる` |
+| 4 | Product D | Electronics | 7 | False | `シンプルな説明` |
+
+**確認できたこと:**
+
+| 検証項目 | 結果 |
+|---------|------|
+| 既存3ファイルのスキップ | ✅ 新規1ファイルのみ処理 |
+| 異なるスキーマへの自動追従 | ✅ `id, name, description, category` を自動認識 |
+| 1行の改行（id=1） | ✅ `高品質アイテム[LF]屋外使用に最適`（15文字） |
+| 3行にまたがる改行（id=3） | ✅ `複数行の[LF]説明文[LF]3行にまたがる`（16文字） |
+| 改行なし通常フィールド（id=2,4） | ✅ そのまま格納 |
+| 履歴への記録 | ✅ `SPROC_LOAD_HISTORY` に4件目として追記 |
+
+**`SPROC_LOAD_HISTORY` 最終状態（全4ファイル）:**
+
+| file_name | row_count | status |
+|-----------|-----------|--------|
+| test_no_comma.csv | 1 | SUCCESS |
+| test_with_comma.csv | 1 | SUCCESS |
+| test_with_header.csv | 2 | SUCCESS |
+| test_products.csv | 4 | SUCCESS |
 
 ---
 

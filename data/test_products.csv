@@ -1,0 +1,8 @@
+id,name,description,category
+1,Product A,"高品質アイテム
+屋外使用に最適",Electronics
+2,Product B,標準アイテム,Clothing
+3,Product C,"複数行の
+説明文
+3行にまたがる",Food
+4,Product D,シンプルな説明,Electronics
